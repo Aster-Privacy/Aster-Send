@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aster-send"
+version = "0.1.0"
+description = "Send email from the command line through any SMTP server, with zero configuration for Aster tokens."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["smtp", "email", "cli", "notifications", "cron"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Programming Language :: Python :: 3",
+  "Topic :: Communications :: Email",
+  "Topic :: System :: Systems Administration",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://astermail.org"
+Source = "https://github.com/Aster-Privacy/Aster-Send"
+Issues = "https://github.com/Aster-Privacy/Aster-Send/issues"
+
+[project.optional-dependencies]
+keyring = ["keyring>=24"]
+
+[project.scripts]
+aster-send = "aster_send.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aster_send"]
