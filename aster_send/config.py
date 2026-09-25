@@ -299,6 +299,16 @@ def render(settings: configuration) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def icacls_path() -> Path:
+    system_root = os.environ.get("SystemRoot", "").strip()
+    root = Path(system_root) if system_root else None
+
+    if root is None or not root.is_absolute():
+        root = Path("C:\\Windows")
+
+    return root / "System32" / "icacls.exe"
+
+
 def restrict_permissions(path: Path) -> bool:
     if os.name != "nt":
         try:
@@ -315,7 +325,7 @@ def restrict_permissions(path: Path) -> bool:
 
     try:
         completed = subprocess.run(
-            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{account}:F"],
+            [str(icacls_path()), str(path), "/inheritance:r", "/grant:r", f"{account}:F"],
             capture_output=True,
             text=True,
             timeout=15,
