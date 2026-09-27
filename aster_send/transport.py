@@ -46,7 +46,9 @@ def local_hostname() -> str:
 
 
 def describe_auth_failure(entry: profile, code: int) -> str:
-    if entry.host.endswith("astermail.org"):
+    host = entry.host.lower().rstrip(".")
+
+    if host == "astermail.org" or host.endswith(".astermail.org"):
         return (
             "the token is wrong or no longer valid, generate a new one in Settings > "
             "Bridge and run aster-send setup again"
