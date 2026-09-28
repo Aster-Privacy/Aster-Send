@@ -103,6 +103,34 @@ class config_tests(unittest.TestCase):
             self.assertEqual(config.config_directory(), Path(self.directory.name))
 
 
+class icacls_tests(unittest.TestCase):
+    def test_uses_absolute_system_root(self):
+        root = "D:\\Win" if os.name == "nt" else "/win"
+
+        with mock.patch.dict(os.environ, {"SystemRoot": root}):
+            self.assertEqual(config.icacls_path(), Path(root) / "System32" / "icacls.exe")
+
+    def test_ignores_missing_or_relative_system_root(self):
+        expected = Path("C:\\Windows") / "System32" / "icacls.exe"
+
+        for value in ("", "Windows"):
+            with mock.patch.dict(os.environ, {"SystemRoot": value}):
+                self.assertEqual(config.icacls_path(), expected)
+
+    @unittest.skipUnless(os.name == "nt", "Windows only")
+    def test_restrict_permissions_runs_the_system_icacls(self):
+        self.assertTrue(config.icacls_path().is_file())
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "config.toml"
+            target.write_text("x")
+
+            with mock.patch.object(config.subprocess, "run", wraps=config.subprocess.run) as run:
+                self.assertTrue(config.restrict_permissions(target))
+
+            self.assertEqual(run.call_args.args[0][0], str(config.icacls_path()))
+
+
 class message_tests(unittest.TestCase):
     def test_builds_headers(self):
         payload = message.build(
