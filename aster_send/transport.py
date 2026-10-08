@@ -140,7 +140,7 @@ def send_once(
 ) -> None:
     with connect(entry, timeout=timeout, notify=notify) as client:
         try:
-            client.send_message(message, from_addr=entry.address, to_addrs=recipients)
+            refused = client.send_message(message, from_addr=entry.address, to_addrs=recipients)
         except smtplib.SMTPRecipientsRefused as error:
             refused = ", ".join(sorted(error.recipients))
             raise transport_error(f"every recipient was refused: {refused}") from error
@@ -154,6 +154,15 @@ def send_once(
                 f"the server returned {error.smtp_code}: {error.smtp_error}",
                 transient=error.smtp_code in TRANSIENT_STATUS_CODES,
             ) from error
+
+        if refused:
+            accepted = ", ".join(value for value in recipients if value not in refused)
+            rejected = ", ".join(sorted(refused))
+            # Retrying the whole envelope would duplicate mail for accepted recipients.
+            raise transport_error(
+                f"partial delivery, message accepted for: {accepted}; recipients refused: {rejected}",
+                "check the refused addresses and retry only those recipients",
+            )
 
 
 def send(
