@@ -158,7 +158,6 @@ def send_once(
         if refused:
             accepted = ", ".join(value for value in recipients if value not in refused)
             rejected = ", ".join(sorted(refused))
-            # Retrying the whole envelope would duplicate mail for accepted recipients.
             raise transport_error(
                 f"partial delivery, message accepted for: {accepted}; recipients refused: {rejected}",
                 "check the refused addresses and retry only those recipients",
