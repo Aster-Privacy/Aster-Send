@@ -222,6 +222,7 @@ class fake_smtp:
 
     def send_message(self, message, from_addr=None, to_addrs=None):
         self.sent.append((from_addr, to_addrs, message))
+        return {}
 
     def quit(self):
         self.quit_called = True
@@ -301,6 +302,29 @@ class transport_tests(unittest.TestCase):
                     )
 
         self.assertEqual(calls["count"], 1)
+
+    def test_partial_refusal_reports_failure_without_resending_accepted_mail(self):
+        entry = sample_profile()
+        recipients = ["a@x.com", "b@x.com"]
+        payload = message.build(entry.address, recipients, "s", "b")
+
+        for code in (450, 550):
+            with self.subTest(code=code):
+                with mock.patch.object(smtplib, "SMTP", fake_smtp):
+                    with mock.patch.object(
+                        fake_smtp, "send_message", return_value={"b@x.com": (code, b"refused")}
+                    ) as send_message:
+                        with self.assertRaises(transport.transport_error) as caught:
+                            transport.send(
+                                entry, payload, recipients, attempts=3,
+                                sleep=lambda seconds: self.fail("partial delivery must not be retried"),
+                            )
+
+                self.assertIn("accepted for: a@x.com", caught.exception.detail)
+                self.assertIn("refused: b@x.com", caught.exception.detail)
+                self.assertFalse(caught.exception.transient)
+                self.assertEqual(send_message.call_count, 1)
+                self.assertTrue(fake_smtp.instances[-1].quit_called)
 
     def test_sender_refusal_mentions_bound_address(self):
         entry = sample_profile()
@@ -411,6 +435,20 @@ class cli_tests(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr)
         self.assertIn("me@example.com", stdout)
+
+    def test_partial_delivery_exits_with_one_and_reports_refused_recipients(self):
+        with mock.patch.object(
+            fake_smtp, "send_message", return_value={"b@x.com": (550, b"no such user")}
+        ) as send_message:
+            code, stdout, stderr = self.run_cli(
+                ["a@x.com", "--bcc", "b@x.com", "-m", "body"]
+            )
+
+        self.assertEqual(code, 1)
+        self.assertNotIn("Sent to", stdout)
+        self.assertIn("accepted for: a@x.com", stderr)
+        self.assertIn("refused: b@x.com", stderr)
+        self.assertEqual(send_message.call_count, 1)
 
     def test_dry_run_sends_nothing(self):
         code, stdout, stderr = self.run_cli(["a@x.com", "-s", "hi", "-m", "b", "--dry-run"])
