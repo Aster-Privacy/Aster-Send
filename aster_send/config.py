@@ -2,6 +2,7 @@
 import os
 import stat
 import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -366,6 +367,11 @@ def save(settings: configuration) -> Path:
 
         raise config_error(f"cannot write {settings.path}: {error}") from error
 
-    restrict_permissions(settings.path)
+    if not restrict_permissions(settings.path):
+        print(
+            f"warning: could not limit {settings.path} to your account; "
+            "other accounts on this computer may be able to read it",
+            file=sys.stderr,
+        )
 
     return settings.path
