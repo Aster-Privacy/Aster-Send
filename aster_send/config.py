@@ -345,24 +345,22 @@ def save(settings: configuration) -> Path:
         raise config_error(f"cannot create {settings.path.parent}: {error}") from error
 
     temporary = settings.path.with_name(f"{settings.path.name}.{os.getpid()}.tmp")
-    descriptor = None
 
     try:
-        descriptor = os.open(
-            temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR
+        os.close(
+            os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR
+            )
         )
+        restrict_permissions(temporary)
 
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            descriptor = None
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
             handle.write(render(settings))
             handle.flush()
             os.fsync(handle.fileno())
 
         os.replace(temporary, settings.path)
     except OSError as error:
-        if descriptor is not None:
-            os.close(descriptor)
-
         temporary.unlink(missing_ok=True)
 
         raise config_error(f"cannot write {settings.path}: {error}") from error

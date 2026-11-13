@@ -763,5 +763,160 @@ class hardening_tests(unittest.TestCase):
             self.assertIn(".", name)
 
 
+class token_host_tests(unittest.TestCase):
+    def setUp(self):
+        fake_smtp.instances = []
+
+    def test_a_token_is_never_offered_to_another_server(self):
+        payload = message.build("bot@example.com", ["a@x.com"], "s", "b")
+
+        for host in (
+            "mail.example.net",
+            "mx.astermail.org.example.net",
+            "notastermail.org",
+            "astermail.org.evil.test",
+        ):
+            entry = sample_profile(host=host)
+
+            with mock.patch.object(smtplib, "SMTP", fake_smtp):
+                with mock.patch.object(smtplib, "SMTP_SSL", fake_smtp):
+                    with self.assertRaises(transport.transport_error) as caught:
+                        transport.send(entry, payload, ["a@x.com"], attempts=1)
+
+            self.assertIn("Aster token", caught.exception.detail)
+            self.assertFalse(caught.exception.transient)
+            self.assertEqual(fake_smtp.instances, [], host)
+
+    def test_a_token_still_reaches_aster_hosts(self):
+        payload = message.build("bot@example.com", ["a@x.com"], "s", "b")
+
+        for host in ("mx.astermail.org", "MX.AsterMail.org.", "astermail.org"):
+            fake_smtp.instances = []
+            entry = sample_profile(host=host)
+
+            with mock.patch.object(smtplib, "SMTP", fake_smtp):
+                transport.send(entry, payload, ["a@x.com"], attempts=1)
+
+            self.assertEqual(fake_smtp.instances[0].logged_in[1], SAMPLE_TOKEN)
+
+    def test_an_ordinary_password_goes_to_any_server(self):
+        payload = message.build("bot@example.com", ["a@x.com"], "s", "b")
+        entry = sample_profile(host="mail.example.net", secret="hunter2", username="bot")
+
+        with mock.patch.object(smtplib, "SMTP", fake_smtp):
+            transport.send(entry, payload, ["a@x.com"], attempts=1)
+
+        self.assertEqual(fake_smtp.instances[0].logged_in, ("bot", "hunter2"))
+
+
+class private_write_tests(unittest.TestCase):
+    def test_the_file_is_private_before_the_secret_is_written(self):
+        seen = []
+        real = config.restrict_permissions
+
+        def record(path):
+            seen.append((Path(path).name, Path(path).read_text(encoding="utf-8")))
+
+            return real(path)
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "config.toml"
+            settings = config.configuration(path=target, default_profile="default")
+            settings.profiles["default"] = sample_profile()
+
+            with mock.patch.object(config, "restrict_permissions", record):
+                config.save(settings)
+
+            self.assertIn(SAMPLE_TOKEN, target.read_text(encoding="utf-8"))
+            self.assertEqual([item.name for item in Path(directory).iterdir()], ["config.toml"])
+
+        self.assertGreaterEqual(len(seen), 1)
+        self.assertNotEqual(seen[0][0], "config.toml")
+        self.assertEqual(seen[0][1], "")
+
+    @unittest.skipUnless(os.name == "nt", "Windows only")
+    def test_the_saved_file_is_limited_to_one_account(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "config.toml"
+            settings = config.configuration(path=target, default_profile="default")
+            settings.profiles["default"] = sample_profile()
+            config.save(settings)
+
+            listing = config.subprocess.run(
+                [str(config.icacls_path()), str(target)], capture_output=True, text=True
+            ).stdout
+
+        entries = [line for line in listing.splitlines() if ":(" in line]
+
+        self.assertEqual(len(entries), 1, listing)
+        self.assertNotIn("(I)", entries[0])
+
+
+class preset_escaping_tests(unittest.TestCase):
+    awkward = "pa'ss\"w#o;r$d\\x y"
+
+    def values(self, secret):
+        return presets.build_values(
+            "mx.astermail.org", 587, "starttls", "asmtp_abc234def567", "bot@x.com", "me@x.com", secret
+        )
+
+    def test_ordinary_values_render_exactly_as_before(self):
+        values = self.values("Abc123-_tokenValue")
+
+        for item in presets.PRESETS:
+            self.assertEqual(presets.render(item.key, values), item.template.format(**values))
+
+    def test_django_settings_stay_valid_python(self):
+        scope = {}
+        exec(presets.render("django", self.values(self.awkward)), {}, scope)
+
+        self.assertEqual(scope["EMAIL_HOST_PASSWORD"], self.awkward)
+        self.assertEqual(scope["EMAIL_HOST"], "mx.astermail.org")
+
+    def test_php_values_cannot_close_the_string(self):
+        for key in ("nextcloud", "wordpress"):
+            rendered = presets.render(key, self.values(self.awkward))
+
+            self.assertIn("'pa\\'ss\"w#o;r$d\\\\x y'", rendered, key)
+
+    def test_ruby_values_cannot_interpolate(self):
+        rendered = presets.render("rails", self.values('a"b#{exit}'))
+
+        self.assertIn('password: "a\\"b\\#{exit}",', rendered)
+
+    def test_yaml_values_are_quoted_when_needed(self):
+        for key in ("home-assistant", "docker-compose", "github-actions"):
+            rendered = presets.render(
+                key,
+                presets.build_values(
+                    "mx.astermail.org", 587, "starttls", "bot: admin #x", "bot@x.com", "me@x.com", "true"
+                ),
+            )
+
+            self.assertNotIn(" bot: admin #x", rendered, key)
+            self.assertNotIn("password: true", rendered, key)
+
+        rendered = presets.render("home-assistant", self.values("12345"))
+
+        self.assertIn('    password: "12345"', rendered)
+
+    def test_env_and_ini_values_are_quoted_when_needed(self):
+        self.assertIn("SMTP_PASSWORD='a b#c'", presets.render("env", self.values("a b#c")))
+        self.assertIn(
+            'SMTP_PASSWORD="it\'s \\$5"', presets.render("env", self.values("it's $5"))
+        )
+        self.assertIn('PASSWD = """a#b;c"""', presets.render("gitea", self.values("a#b;c")))
+        self.assertIn('password = """a#b;c"""', presets.render("grafana", self.values("a#b;c")))
+        self.assertIn('password       "a b#c"', presets.render("msmtp", self.values("a b#c")))
+
+    def test_a_line_break_is_refused_everywhere(self):
+        for item in presets.PRESETS:
+            if "{secret}" not in item.template:
+                continue
+
+            with self.assertRaises(presets.preset_error, msg=item.key):
+                presets.render(item.key, self.values("pw\nINJECTED = 1"))
+
+
 if __name__ == "__main__":
     unittest.main()

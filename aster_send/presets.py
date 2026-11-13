@@ -1,7 +1,17 @@
 # SPDX-License-Identifier: MIT
+import json
+import re
 from dataclasses import dataclass
 
 SECRET_PLACEHOLDER = "YOUR_TOKEN"
+QUOTED_FIELDS = ("host", "username", "address", "local_part", "domain", "recipient", "secret")
+CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]")
+BARE_VALUE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._@+/=-]*")
+YAML_KEYWORDS = frozenset({"true", "false", "yes", "no", "on", "off", "null", "y", "n"})
+
+
+class preset_error(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -9,6 +19,96 @@ class preset:
     key: str
     title: str
     template: str
+    syntax: str = "plain"
+
+
+def reads_as_a_number(value: str) -> bool:
+    for parse in (float, lambda text: int(text, 0)):
+        try:
+            parse(value)
+        except ValueError:
+            continue
+
+        return True
+
+    return False
+
+
+def is_bare(value: str) -> bool:
+    return not value or BARE_VALUE.fullmatch(value) is not None
+
+
+def quote_plain(value: str) -> str:
+    return value
+
+
+def quote_yaml(value: str) -> str:
+    if is_bare(value) and value.lower() not in YAML_KEYWORDS and not reads_as_a_number(value):
+        return value
+
+    return json.dumps(value)
+
+
+def quote_php(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def quote_python(value: str) -> str:
+    return json.dumps(value)[1:-1]
+
+
+def quote_ruby(value: str) -> str:
+    return quote_python(value).replace("#", "\\#")
+
+
+def quote_ini(value: str) -> str:
+    if is_bare(value):
+        return value
+
+    if '"""' not in value:
+        return f'"""{value}"""'
+
+    if "`" not in value:
+        return f"`{value}`"
+
+    raise preset_error("this value cannot be written safely in an INI file")
+
+
+def quote_env(value: str) -> str:
+    if is_bare(value):
+        return value
+
+    if "'" not in value:
+        return f"'{value}'"
+
+    escaped = value
+
+    for character in ("\\", '"', "$", "`"):
+        escaped = escaped.replace(character, f"\\{character}")
+
+    return f'"{escaped}"'
+
+
+def quote_msmtp(value: str) -> str:
+    if is_bare(value):
+        return value
+
+    if '"' not in value:
+        return f'"{value}"'
+
+    raise preset_error("msmtp cannot read a value that contains a double quote")
+
+
+QUOTERS = {
+    "plain": quote_plain,
+    "yaml": quote_yaml,
+    "php": quote_php,
+    "python": quote_python,
+    "ruby": quote_ruby,
+    "ini": quote_ini,
+    "env": quote_env,
+    "msmtp": quote_msmtp,
+}
 
 
 PRESETS: tuple[preset, ...] = (
@@ -26,6 +126,7 @@ PRESETS: tuple[preset, ...] = (
     sender: {address}
     recipient:
       - {recipient}""",
+        "yaml",
     ),
     preset(
         "gitea",
@@ -38,6 +139,7 @@ SMTP_PORT = {port}
 FROM = {address}
 USER = {username}
 PASSWD = {secret}""",
+        "ini",
     ),
     preset(
         "grafana",
@@ -50,6 +152,7 @@ password = {secret}
 from_address = {address}
 from_name = Grafana
 startTLS_policy = {starttls_policy}""",
+        "ini",
     ),
     preset(
         "nextcloud",
@@ -63,6 +166,7 @@ startTLS_policy = {starttls_policy}""",
 'mail_smtppassword' => '{secret}',
 'mail_from_address' => '{local_part}',
 'mail_domain' => '{domain}',""",
+        "php",
     ),
     preset(
         "uptime-kuma",
@@ -75,6 +179,7 @@ Username            {username}
 Password            {secret}
 From email          {address}
 To email            {recipient}""",
+        "plain",
     ),
     preset(
         "django",
@@ -87,6 +192,7 @@ EMAIL_USE_SSL = {use_ssl_python}
 EMAIL_HOST_USER = "{username}"
 EMAIL_HOST_PASSWORD = "{secret}"
 DEFAULT_FROM_EMAIL = "{address}\"""",
+        "python",
     ),
     preset(
         "rails",
@@ -100,6 +206,7 @@ config.action_mailer.smtp_settings = {{
   authentication: :plain,
   enable_starttls_auto: {starttls_ruby}
 }}""",
+        "ruby",
     ),
     preset(
         "wordpress",
@@ -111,6 +218,7 @@ define('SMTP_AUTH', true);
 define('SMTP_USER', '{username}');
 define('SMTP_PASS', '{secret}');
 define('SMTP_FROM', '{address}');""",
+        "php",
     ),
     preset(
         "github-actions",
@@ -127,6 +235,7 @@ define('SMTP_FROM', '{address}');""",
     to: {recipient}
     subject: Build ${{{{ github.run_number }}}}
     body: The workflow finished.""",
+        "yaml",
     ),
     preset(
         "msmtp",
@@ -145,6 +254,7 @@ user           {username}
 password       {secret}
 
 account default : aster""",
+        "msmtp",
     ),
     preset(
         "docker-compose",
@@ -156,6 +266,7 @@ account default : aster""",
   SMTP_USERNAME: {username}
   SMTP_PASSWORD: ${{SMTP_PASSWORD}}
   SMTP_FROM: {address}""",
+        "yaml",
     ),
     preset(
         "env",
@@ -166,6 +277,7 @@ SMTP_SECURITY={security_label}
 SMTP_USERNAME={username}
 SMTP_PASSWORD={secret}
 SMTP_FROM={address}""",
+        "env",
     ),
 )
 
@@ -174,8 +286,21 @@ PRESETS_BY_KEY = {item.key: item for item in PRESETS}
 
 def render(key: str, values: dict) -> str:
     item = PRESETS_BY_KEY[key]
+    quote = QUOTERS[item.syntax]
+    quoted = dict(values)
 
-    return item.template.format(**values)
+    for name in QUOTED_FIELDS:
+        value = str(values[name])
+
+        if CONTROL_CHARACTER.search(value):
+            raise preset_error(
+                f"the {name.replace('_', ' ')} contains a line break or control character, "
+                "so it cannot be written to a configuration file"
+            )
+
+        quoted[name] = quote(value)
+
+    return item.template.format(**quoted)
 
 
 def build_values(
