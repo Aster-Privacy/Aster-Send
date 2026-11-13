@@ -324,18 +324,24 @@ def restrict_permissions(path: Path) -> bool:
     if not account:
         return False
 
+    steps = (["/reset"], ["/inheritance:r", "/grant:r", f"{account}:F"])
+
     try:
-        completed = subprocess.run(
-            [str(icacls_path()), str(path), "/inheritance:r", "/grant:r", f"{account}:F"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        for step in steps:
+            completed = subprocess.run(
+                [str(icacls_path()), str(path), *step],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+
+            if completed.returncode != 0:
+                return False
     except (OSError, subprocess.SubprocessError):
         return False
 
-    return completed.returncode == 0
+    return True
 
 
 def save(settings: configuration) -> Path:
