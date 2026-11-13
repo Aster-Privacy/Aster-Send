@@ -5,6 +5,7 @@ ASTER_TOKEN_PREFIX = "asmtp_"
 ASTER_HOST = "mx.astermail.org"
 ASTER_PORT = 587
 ASTER_SECURITY = "starttls"
+ASTER_DOMAIN = "astermail.org"
 SELECTOR_ALPHABET = frozenset("abcdefghijklmnopqrstuvwxyz234567")
 SECRET_ALPHABET = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -18,6 +19,12 @@ class aster_token:
     host: str = ASTER_HOST
     port: int = ASTER_PORT
     security: str = ASTER_SECURITY
+
+
+def is_aster_host(host: str) -> bool:
+    normalized = host.strip().lower().rstrip(".")
+
+    return normalized == ASTER_DOMAIN or normalized.endswith(f".{ASTER_DOMAIN}")
 
 
 def looks_like_aster_token(secret: str) -> bool:

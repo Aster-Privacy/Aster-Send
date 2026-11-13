@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from email.message import EmailMessage
 
 from .config import profile
+from .token import is_aster_host, looks_like_aster_token
 
 DEFAULT_TIMEOUT = 20.0
 DEFAULT_ATTEMPTS = 3
@@ -46,9 +47,7 @@ def local_hostname() -> str:
 
 
 def describe_auth_failure(entry: profile, code: int) -> str:
-    host = entry.host.lower().rstrip(".")
-
-    if host == "astermail.org" or host.endswith(".astermail.org"):
+    if is_aster_host(entry.host):
         return (
             "the token is wrong or no longer valid, generate a new one in Settings > "
             "Bridge and run aster-send setup again"
@@ -71,6 +70,13 @@ def connect(entry: profile, timeout: float = DEFAULT_TIMEOUT, notify=None):
         raise transport_error(
             "refusing to send a password over an unencrypted connection",
             "use starttls or ssl, or pass --allow-plaintext-auth if the server is local",
+        )
+
+    if looks_like_aster_token(entry.secret) and not is_aster_host(entry.host):
+        raise transport_error(
+            f"refusing to send an Aster token to {entry.host}, which is not an Aster server",
+            "remove the host from this profile so the token's own server is used, "
+            "or use that server's password instead",
         )
 
     context = ssl.create_default_context()

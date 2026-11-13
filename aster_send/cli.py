@@ -435,8 +435,14 @@ def command_config(args: argparse.Namespace) -> int:
     )
 
     item = presets.PRESETS_BY_KEY[args.app]
+
+    try:
+        rendered = presets.render(args.app, values)
+    except presets.preset_error as error:
+        return fail(str(error))
+
     report(f"# {item.title}")
-    report(presets.render(args.app, values))
+    report(rendered)
 
     if not args.reveal:
         report()
