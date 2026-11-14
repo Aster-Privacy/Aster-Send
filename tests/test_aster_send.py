@@ -873,6 +873,13 @@ class preset_escaping_tests(unittest.TestCase):
         self.assertEqual(scope["EMAIL_HOST_PASSWORD"], self.awkward)
         self.assertEqual(scope["EMAIL_HOST"], "mx.astermail.org")
 
+    def test_django_settings_keep_characters_outside_the_basic_plane(self):
+        value = "p" + chr(0x1F600) + chr(0xE9) + "q"
+        scope = {}
+        exec(presets.render("django", self.values(value)), {}, scope)
+
+        self.assertEqual(scope["EMAIL_HOST_PASSWORD"], value)
+
     def test_php_values_cannot_close_the_string(self):
         for key in ("nextcloud", "wordpress"):
             rendered = presets.render(key, self.values(self.awkward))
