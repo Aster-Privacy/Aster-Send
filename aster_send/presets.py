@@ -54,7 +54,7 @@ def quote_php(value: str) -> str:
 
 
 def quote_python(value: str) -> str:
-    return json.dumps(value)[1:-1]
+    return json.dumps(value, ensure_ascii=False)[1:-1]
 
 
 def quote_ruby(value: str) -> str:
